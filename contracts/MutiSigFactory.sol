@@ -5,13 +5,15 @@ import "./MultiSigWallet.sol";
 
 contract MultiSigFactory {
     // --------------- STORAGE ----------------
-    MultiSigWallet[] public multiSigWalletInstances;
+    uint256 id;
+    mapping(uint256 => address) public multiSigWalletInstances;
     mapping(address => mapping(address => bool)) public ownerWallets;
 
     // --------------- EVENT ----------------
     event WalletCreated(
         address createdBy,
-        address newWalletAddress,
+        uint256 idWallet,
+        address addressWallet,
         address[] owners,
         uint256 required
     );
@@ -24,12 +26,16 @@ contract MultiSigFactory {
             _required,
             address(this)
         );
-        multiSigWalletInstances.push(newMultiSigWalletContract);
+
+        id += 1;
+        multiSigWalletInstances[id] = address(newMultiSigWalletContract);
+
         for (uint256 i; i < _owners.length; i++) {
             ownerWallets[_owners[i]][address(newMultiSigWalletContract)] = true;
         }
         emit WalletCreated(
             msg.sender,
+            id,
             address(newMultiSigWalletContract),
             _owners,
             _required

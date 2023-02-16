@@ -21,6 +21,7 @@ contract MultiSigWallet {
     }
     struct IdInfo {
         // info about an id
+        uint256 id;
         State state; // state of transaction
         IdType idType;
         uint256 totalApproval; // total approve
@@ -36,7 +37,7 @@ contract MultiSigWallet {
         uint256 amount; // amount
     }
     mapping(uint256 => Transaction) public transactions; // id => trans
-    uint256 public transPending; // check whether any transactionID are currently unresolve
+    uint256 public transAmount; // check whether any transactionID are currently unresolve
     /* 
         If there is any transactionID still unresolved, wallet won't let user creat a new consensusID
         Because it can change consensus rule of pending transaction
@@ -54,13 +55,14 @@ contract MultiSigWallet {
         address[] delOwners;
         uint256 approvalsRequired;
     }
-    ConsChangeInfo public consChangeInfo;
-    bool isConsChanging; // check whether any consensusID are currently unresolve
+    ConsChangeInfo consChangeInfo;
+    bool public isConsChanging; // check whether any consensusID are currently unresolve
 
     /* 
         If there is any consensusID still unresolved, wallet won't let user create a new transaction. 
         Only 1 consensusID is allowed at a time, and make sure to resolve it before creating a new transactionID or consensusID
-        Because we have to make sure about consensus rule before creating a new ID  
+        Because we have to make sure about consensus rule before creating a new ID.
+        But we can make multiple transaction at a time.  
     */
 
     // --------------- CONSTRUCTOR ----------------
@@ -79,7 +81,7 @@ contract MultiSigWallet {
         for (uint256 i; i < totalOwner; i++) {
             address owner = _owners[i];
 
-            require(owner != address(0), "invalid owner");
+            require(owner != address(0), "invalid address");
             isOwner[owner] = true;
         }
 
@@ -98,7 +100,7 @@ contract MultiSigWallet {
         _;
     }
     modifier notVoted(uint256 _id) {
-        require(!voted[_id][msg.sender], "user already voted this trans");
+        require(!voted[_id][msg.sender], "user already voted this id");
         _;
     }
     modifier notExecuted(uint256 _id) {
@@ -130,9 +132,12 @@ contract MultiSigWallet {
     // create a new transaction
     function createTrans(address _to, uint256 _amount) external onlyOwner {
         require(!isConsChanging, "Consensus is changing"); // make sure there isn't pending consensusID
+        require(address(this).balance > transAmount + _amount, "insufficient balance");
 
+        id += 1;
         transactions[id] = Transaction({to: _to, amount: _amount});
-        handleCreate(IdType.Transaction);
+        transAmount += _amount;
+        createId(IdType.Transaction);
 
         emit CreateTrans(id, msg.sender, _to, _amount);
     }
@@ -146,7 +151,7 @@ contract MultiSigWallet {
             consensus.totalOwner - consensus.approvalsRequired
         ) {
             idInfo.state = State.Fail;
-            transPending -= 1;
+            transAmount -=  transaction.amount;
             emit Fail(_id);
         } else if (idInfo.totalApproval >= consensus.approvalsRequired) {
             require(
@@ -158,7 +163,7 @@ contract MultiSigWallet {
             );
             require(success, "transfer failed");
             idInfo.state = State.Success;
-            transPending -= 1;
+            transAmount -=  transaction.amount;
             emit Success(_id);
         }
     }
@@ -170,20 +175,43 @@ contract MultiSigWallet {
         address[] calldata _delOwners,
         uint256 _approvalsRequired
     ) external onlyOwner {
-        require(transPending == 0, "transaction pending"); // make sure there isn't pending transactionID
+        require(transAmount == 0, "transaction pending"); // make sure there isn't pending transactionID
+
+        uint256 addLen = _addOwners.length;
+        uint256 delLen = _delOwners.length;
+        require(consensus.totalOwner + addLen > delLen, "Not delete all user");
 
         if (_approvalsRequired > 0) {
+            require(
+                _approvalsRequired <= consensus.totalOwner + addLen - delLen,
+                "invalid required number of owners"
+            );
             consChangeInfo.approvalsRequired = _approvalsRequired;
         }
         if (_addOwners.length > 0) {
+            for (uint256 i = 0; i < addLen; i++) {
+                address owner = _addOwners[i];
+                require(owner != address(0), "invalid address");
+                require(!isOwner[owner], "owner existed");
+            }
             consChangeInfo.addOwners = _addOwners;
         }
         if (_delOwners.length > 0) {
+            for (uint256 i = 0; i < delLen; i++) {
+                address owner = _delOwners[i];
+                require(isOwner[owner], "owner not exist");
+            }
             consChangeInfo.delOwners = _delOwners;
         }
 
-        handleCreate(IdType.Transaction);
+        id += 1;
+        isConsChanging = true;
+        createId(IdType.Consensus);
         emit CreateCons(id, msg.sender);
+    }
+
+    function getConsChangeInfo() external view returns (ConsChangeInfo memory) {
+        return consChangeInfo;
     }
 
     function resolveCons(uint256 _id, IdInfo storage idInfo) private {
@@ -191,6 +219,7 @@ contract MultiSigWallet {
             idInfo.totalReject >
             consensus.totalOwner - consensus.approvalsRequired
         ) {
+            delete consChangeInfo;
             idInfo.state = State.Fail;
             isConsChanging = false;
             emit Fail(_id);
@@ -202,16 +231,9 @@ contract MultiSigWallet {
             uint256 approvalsRequired = consChangeInfo.approvalsRequired;
             MultiSigFactory factory = MultiSigFactory(multiSigFactory);
 
-            require(
-                consensus.totalOwner + addLen > delLen,
-                "Not delete all user"
-            );
-            consensus.totalOwner = consensus.totalOwner + addLen - delLen;
             if (addLen > 0) {
                 for (uint256 i = 0; i < addLen; i++) {
                     address owner = addOwners[i];
-                    require(owner != address(0), "invalid owner");
-                    require(!isOwner[owner], "owner existed");
                     isOwner[owner] = true;
                     factory.updateOwner(owner, address(this), true);
                 }
@@ -219,17 +241,13 @@ contract MultiSigWallet {
             if (delLen > 0) {
                 for (uint256 i = 0; i < delLen; i++) {
                     address owner = delOwners[i];
-                    require(isOwner[owner], "owner not exist");
                     isOwner[owner] = false;
                     factory.updateOwner(owner, address(this), false);
                 }
             }
 
+            consensus.totalOwner = consensus.totalOwner + addLen - delLen;
             if (approvalsRequired > 0) {
-                require(
-                    approvalsRequired <= consensus.totalOwner,
-                    "invalid required number of owners"
-                );
                 consensus.approvalsRequired = approvalsRequired;
             }
 
@@ -241,11 +259,13 @@ contract MultiSigWallet {
     }
 
     // owner vote for id: approve or not approve
-    function vote(
-        uint256 _id,
-        bool _vote,
-        IdType _idType
-    ) external onlyOwner isIdExist(_id) notVoted(_id) notExecuted(_id) {
+    function vote(uint256 _id, bool _vote)
+        external
+        onlyOwner
+        isIdExist(_id)
+        notVoted(_id)
+        notExecuted(_id)
+    {
         voted[_id][msg.sender] = true;
         emit Voted(_id, msg.sender, _vote);
 
@@ -256,7 +276,7 @@ contract MultiSigWallet {
             idInfo.totalReject += 1;
         }
 
-        if (_idType == IdType.Transaction) {
+        if (idInfo.idType == IdType.Transaction) {
             resolveTrans(_id, idInfo);
         } else {
             resolveCons(_id, idInfo);
@@ -264,20 +284,14 @@ contract MultiSigWallet {
     }
 
     // helper: handle create
-    function handleCreate(IdType _idType) private {
-        id += 1;
+    function createId(IdType _idType) private {
         voted[id][msg.sender] = true;
         idsInfo[id] = IdInfo({
+            id: id,
             state: State.Pending,
             idType: _idType,
             totalApproval: 1,
             totalReject: 0
         });
-
-        if (_idType == IdType.Transaction) {
-            transPending += 1;
-        } else {
-            isConsChanging = true;
-        }
     }
 }
