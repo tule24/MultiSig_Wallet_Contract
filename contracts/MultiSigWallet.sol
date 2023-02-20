@@ -118,8 +118,19 @@ contract MultiSigWallet {
     );
     event CreateCons(uint256 indexed id, address indexed creator);
     event Voted(uint256 indexed id, address indexed owner, bool isApproved);
-    event Success(uint256 indexed id);
-    event Fail(uint256 indexed id);
+    event ResolveTrans(
+        uint256 indexed id,
+        bool success,
+        uint256 balance,
+        uint256 balanceLock
+    );
+    event ResolveCons(
+        uint256 indexed id,
+        bool success,
+        address[] addOwners,
+        address[] delOwners,
+        uint256 approvalsRequired
+    );
 
     // --------------- FUNCTION ----------------
 
@@ -132,7 +143,10 @@ contract MultiSigWallet {
     // create a new transaction
     function createTrans(address _to, uint256 _amount) external onlyOwner {
         require(!isConsChanging, "Consensus is changing"); // make sure there isn't pending consensusID
-        require(address(this).balance > transAmount + _amount, "insufficient balance");
+        require(
+            address(this).balance > transAmount + _amount,
+            "insufficient balance"
+        );
 
         id += 1;
         transactions[id] = Transaction({to: _to, amount: _amount});
@@ -145,26 +159,21 @@ contract MultiSigWallet {
     // execute transaction: compare totalApprove and totalReject with approvalsRequired to should execute or cancel this trans
     function resolveTrans(uint256 _id, IdInfo storage idInfo) private {
         Transaction memory transaction = transactions[_id];
-
+        uint256 amount = transaction.amount;
         if (
             idInfo.totalReject >
             consensus.totalOwner - consensus.approvalsRequired
         ) {
             idInfo.state = State.Fail;
-            transAmount -=  transaction.amount;
-            emit Fail(_id);
+            transAmount -= amount;
+            emit ResolveTrans(_id, false, address(this).balance, transAmount);
         } else if (idInfo.totalApproval >= consensus.approvalsRequired) {
-            require(
-                address(this).balance > transaction.amount,
-                "insufficient balance"
-            );
-            (bool success, ) = transaction.to.call{value: transaction.amount}(
-                ""
-            );
+            require(address(this).balance > amount, "insufficient balance");
+            (bool success, ) = transaction.to.call{value: amount}("");
             require(success, "transfer failed");
             idInfo.state = State.Success;
-            transAmount -=  transaction.amount;
-            emit Success(_id);
+            transAmount -= amount;
+            emit ResolveTrans(_id, true, address(this).balance, transAmount);
         }
     }
 
@@ -215,6 +224,9 @@ contract MultiSigWallet {
     }
 
     function resolveCons(uint256 _id, IdInfo storage idInfo) private {
+        address[] memory addOwners = consChangeInfo.addOwners;
+        address[] memory delOwners = consChangeInfo.delOwners;
+        uint256 approvalsRequired = consChangeInfo.approvalsRequired;
         if (
             idInfo.totalReject >
             consensus.totalOwner - consensus.approvalsRequired
@@ -222,13 +234,16 @@ contract MultiSigWallet {
             delete consChangeInfo;
             idInfo.state = State.Fail;
             isConsChanging = false;
-            emit Fail(_id);
+            emit ResolveCons(
+                _id,
+                false,
+                addOwners,
+                delOwners,
+                approvalsRequired
+            );
         } else if (idInfo.totalApproval >= consensus.approvalsRequired) {
-            address[] memory addOwners = consChangeInfo.addOwners;
             uint256 addLen = addOwners.length;
-            address[] memory delOwners = consChangeInfo.delOwners;
             uint256 delLen = delOwners.length;
-            uint256 approvalsRequired = consChangeInfo.approvalsRequired;
             MultiSigFactory factory = MultiSigFactory(multiSigFactory);
 
             if (addLen > 0) {
@@ -251,10 +266,16 @@ contract MultiSigWallet {
                 consensus.approvalsRequired = approvalsRequired;
             }
 
-            delete consChangeInfo;
             idInfo.state = State.Success;
             isConsChanging = false;
-            emit Success(_id);
+            emit ResolveCons(
+                _id,
+                true,
+                addOwners,
+                delOwners,
+                approvalsRequired
+            );
+            delete consChangeInfo;
         }
     }
 

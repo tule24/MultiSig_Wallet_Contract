@@ -171,7 +171,7 @@ describe("MultiSig Factory", () => {
       const beforeUserBal = await signers[4].getBalance()
 
       const transaction = await multiSigWallet.connect(signers[3]).vote(curId, true)
-      await transaction.wait()
+      const receipt = await transaction.wait()
 
       const curIdInfo = await multiSigWallet.idsInfo(curId)
       expect(Number(curIdInfo.totalApproval)).to.equal(2)
@@ -293,7 +293,7 @@ describe("MultiSig Factory", () => {
     it("Should consensus ID success", async () => {
       const curId = await multiSigWallet.id()
       const transaction = await multiSigWallet.connect(signers[2]).vote(curId, true)
-      await transaction.wait()
+      const receipt = await transaction.wait()
 
       const curIdInfo = await multiSigWallet.idsInfo(curId)
       expect(Number(curIdInfo.totalApproval)).to.equal(2)
@@ -335,21 +335,21 @@ describe("MultiSig Factory", () => {
   })
 
   describe("Create multiple transaction ID", () => {
-    it("Should revert if total amount > wallet balance", async() => {
+    it("Should revert if total amount > wallet balance", async () => {
       const transaction1 = await multiSigWallet.connect(signers[1]).createTrans(signers[4].address, ethers.utils.parseEther('1'))
       await transaction1.wait()
 
       const transaction2 = multiSigWallet.connect(signers[1]).createTrans(signers[4].address, ethers.utils.parseEther('9'))
       await expect(transaction2).to.be.revertedWith("insufficient balance")
     })
-    it("Should create multiple transaction ID success", async() => {
+    it("Should create multiple transaction ID success", async () => {
       const transaction1 = await multiSigWallet.connect(signers[1]).createTrans(signers[4].address, ethers.utils.parseEther('1'))
       await transaction1.wait()
 
       const transAmount = await multiSigWallet.transAmount()
       expect(ethers.utils.formatEther(transAmount) * 1).to.equal(2)
     })
-    it("Should multiple transaction work exactly", async() => {
+    it("Should multiple transaction work exactly", async () => {
       const beforeWalletBal = await multiSigWallet.provider.getBalance(multiSigWallet.address)
       const beforeUserBal = await signers[4].getBalance()
 
